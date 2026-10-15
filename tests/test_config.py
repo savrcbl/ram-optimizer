@@ -58,3 +58,17 @@ def test_returned_dict_is_a_copy():
     a = config.load_config()
     a["trim_threshold_percent"] = 1
     assert config.load_config()["trim_threshold_percent"] == 85
+
+
+def test_excluded_list_is_not_shared_between_loads():
+    a = config.load_config()
+    a["excluded_apps"].append("game.exe")
+    assert config.load_config()["excluded_apps"] == []
+    assert config.DEFAULT_CONFIG["excluded_apps"] == []
+
+
+def test_excluded_list_roundtrip_and_non_strings_dropped():
+    config.get_config_dir().mkdir(parents=True)
+    config.get_config_path().write_text(
+        json.dumps({"excluded_apps": ["game.exe", 5, None, "obs64.exe"]}), encoding="utf-8")
+    assert config.load_config()["excluded_apps"] == ["game.exe", "obs64.exe"]

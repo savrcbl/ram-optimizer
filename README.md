@@ -10,6 +10,8 @@ manages startup apps, and trims memory from idle background processes when RAM i
 - Smart clean: trims the working set of large, non-protected, non-foreground processes.
   The "freed" amount is the real change in system available memory, measured after a
   2-second settle delay (not a sum of per-process numbers, which double-counts shared memory).
+- Exclude list: apps that Smart clean and auto mode never trim (a game, a video editor).
+  Add them by selecting a process and pressing "Never trim", or type a name like `game.exe`.
 - Auto mode: checks every few seconds and runs Smart clean when RAM use passes your threshold,
   then waits for a cooldown.
 

@@ -53,7 +53,8 @@ class AutoWatcher:
             return None
         if not self._is_tight(cfg["trim_threshold_percent"]):
             return None
-        result = self._trim(cfg["min_process_mb_to_trim"])
+        result = self._trim(cfg["min_process_mb_to_trim"],
+                            excluded=cfg.get("excluded_apps", []))
         self._last_trim = self._clock()
         if self._on_trim:
             self._on_trim(result)

@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from auto_mode import AutoWatcher
 from config import save_config
+from excludes import add_excluded, remove_excluded
 from memory import get_memory_stats
 from processes import close_process, list_top_processes
 from startup import list_startup_apps, set_startup_enabled
@@ -31,6 +32,7 @@ class App(ctk.CTk):
         self._build_meter()
         self._build_processes()
         self._build_startup()
+        self._build_excludes()
         self._build_clean()
         if self.cfg["auto_mode"]:
             self.watcher.start()
@@ -39,6 +41,7 @@ class App(ctk.CTk):
         self._tick_meter()
         self.refresh_processes()
         self.refresh_startup()
+        self.refresh_excludes()
 
     # ---- sections -------------------------------------------------
     def _section(self, title: str) -> ctk.CTkFrame:
@@ -75,8 +78,10 @@ class App(ctk.CTk):
         row = ctk.CTkFrame(f, fg_color="transparent")
         row.pack(fill="x", padx=10, pady=(0, 8))
         ctk.CTkButton(row, text="Close process", command=self._close_selected).pack(side="left")
-        ctk.CTkButton(row, text="Refresh", width=80, command=self.refresh_processes).pack(
+        ctk.CTkButton(row, text="Never trim", width=90, command=self._exclude_selected).pack(
             side="left", padx=8)
+        ctk.CTkButton(row, text="Refresh", width=80, command=self.refresh_processes).pack(
+            side="left")
         self.proc_status = ctk.CTkLabel(row, text="")
         self.proc_status.pack(side="left", padx=8)
 
@@ -84,6 +89,17 @@ class App(ctk.CTk):
         f = self._section("Startup apps")
         self.startup_frame = ctk.CTkScrollableFrame(f, height=90)
         self.startup_frame.pack(fill="x", padx=10, pady=(0, 8))
+
+    def _build_excludes(self) -> None:
+        f = self._section("Never trim these apps")
+        self.exclude_frame = ctk.CTkScrollableFrame(f, height=70)
+        self.exclude_frame.pack(fill="x", padx=10, pady=(0, 4))
+        row = ctk.CTkFrame(f, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=(0, 8))
+        self.exclude_entry = ctk.CTkEntry(row, width=220, placeholder_text="e.g. game.exe")
+        self.exclude_entry.pack(side="left")
+        ctk.CTkButton(row, text="Add", width=70, command=self._add_typed).pack(
+            side="left", padx=8)
 
     def _build_clean(self) -> None:
         f = self._section("Smart clean and auto mode")
@@ -148,6 +164,41 @@ class App(ctk.CTk):
             self.proc_status.configure(text=f"Could not change {name}")
             self.refresh_startup()
 
+    def refresh_excludes(self) -> None:
+        for w in self.exclude_frame.winfo_children():
+            w.destroy()
+        names = self.cfg["excluded_apps"]
+        if not names:
+            ctk.CTkLabel(self.exclude_frame, text="No apps excluded").pack(anchor="w")
+        for name in names:
+            row = ctk.CTkFrame(self.exclude_frame, fg_color="transparent")
+            row.pack(fill="x")
+            ctk.CTkLabel(row, text=name).pack(side="left")
+            ctk.CTkButton(row, text="Remove", width=70, height=22,
+                          command=lambda n=name: self._remove_excluded(n)).pack(side="right")
+
+    def _exclude_selected(self) -> None:
+        sel = self.tree.selection()
+        if sel:
+            self._add_excluded(self.tree.item(sel[0], "values")[0])
+
+    def _add_typed(self) -> None:
+        self._add_excluded(self.exclude_entry.get())
+        self.exclude_entry.delete(0, "end")
+
+    def _add_excluded(self, name: str) -> None:
+        if add_excluded(self.cfg, name):
+            save_config(self.cfg)
+            self.refresh_excludes()
+            self.proc_status.configure(text=f"{name} will never be trimmed")
+        else:
+            self.proc_status.configure(text="Already excluded (or empty name)")
+
+    def _remove_excluded(self, name: str) -> None:
+        if remove_excluded(self.cfg, name):
+            save_config(self.cfg)
+            self.refresh_excludes()
+
     def _close_selected(self) -> None:
         sel = self.tree.selection()
         if not sel:
@@ -168,7 +219,9 @@ class App(ctk.CTk):
 
         def work():
             try:
-                self.q.put(("clean", smart_trim(self.cfg["min_process_mb_to_trim"])))
+                self.q.put(("clean", smart_trim(
+                    self.cfg["min_process_mb_to_trim"],
+                    excluded=list(self.cfg["excluded_apps"]))))
             except Exception as e:
                 self.q.put(("error", f"Clean failed: {e}"))
         threading.Thread(target=work, daemon=True).start()

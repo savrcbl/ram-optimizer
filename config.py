@@ -11,7 +11,13 @@ DEFAULT_CONFIG = {
     "check_interval_seconds": 10,
     "cooldown_seconds": 120,
     "min_process_mb_to_trim": 50,
+    "excluded_apps": [],
 }
+
+
+def _defaults() -> dict:
+    """Fresh copy of the defaults (lists copied too, so callers can't alter them)."""
+    return {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT_CONFIG.items()}
 
 
 def get_config_dir() -> Path:
@@ -28,7 +34,7 @@ def get_config_path() -> Path:
 
 def load_config() -> dict:
     """Load settings; missing or broken file gives defaults. Never writes."""
-    cfg = dict(DEFAULT_CONFIG)  # always a fresh copy
+    cfg = _defaults()
     try:
         with open(get_config_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -44,7 +50,10 @@ def load_config() -> dict:
 
     for key, default in DEFAULT_CONFIG.items():
         if key in data and type(data[key]) is type(default):
-            cfg[key] = data[key]
+            value = data[key]
+            if isinstance(default, list):
+                value = [x for x in value if isinstance(x, str)]
+            cfg[key] = value
     return cfg
 
 
