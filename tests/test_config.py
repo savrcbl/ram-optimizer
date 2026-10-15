@@ -72,3 +72,10 @@ def test_excluded_list_roundtrip_and_non_strings_dropped():
     config.get_config_path().write_text(
         json.dumps({"excluded_apps": ["game.exe", 5, None, "obs64.exe"]}), encoding="utf-8")
     assert config.load_config()["excluded_apps"] == ["game.exe", "obs64.exe"]
+
+
+def test_process_list_limit_default_and_override():
+    assert config.load_config()["process_list_limit"] == 15
+    config.get_config_dir().mkdir(parents=True)
+    config.get_config_path().write_text(json.dumps({"process_list_limit": 0}), encoding="utf-8")
+    assert config.load_config()["process_list_limit"] == 0

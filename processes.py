@@ -41,6 +41,22 @@ def list_top_processes(limit: int | None = 15) -> list[dict]:
     return rows if limit is None else rows[:limit]
 
 
+def filter_processes(rows: list[dict], query: str = "",
+                     limit: int | None = 15) -> tuple[list[dict], int]:
+    """Filter rows by name or PID (case-insensitive), then keep the first `limit`.
+
+    Rows should already be sorted. limit of 0, None or negative means show all.
+    Returns (rows_to_show, total_matches).
+    """
+    q = query.strip().lower()
+    if q:
+        rows = [r for r in rows if q in r["name"].lower() or q in str(r["pid"])]
+    total = len(rows)
+    if limit and limit > 0:
+        rows = rows[:limit]
+    return list(rows), total
+
+
 def close_process(pid: int) -> tuple[bool, str]:
     """Politely close a process. Refuses protected processes and ourselves."""
     try:

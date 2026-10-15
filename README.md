@@ -5,7 +5,8 @@ manages startup apps, and trims memory from idle background processes when RAM i
 
 ## What it does
 - Live RAM meter.
-- Top 15 processes by RAM, with a Close button (protected system processes are greyed out and refused).
+- Process list sorted by RAM: search by name or PID, choose how many to show (15 by default, up to All),
+  scrollable, with a Close button (protected system processes are greyed out and refused).
 - Startup manager for apps in `HKCU\...\Run` (toggle on/off; nothing is deleted).
 - Smart clean: trims the working set of large, non-protected, non-foreground processes.
   The "freed" amount is the real change in system available memory, measured after a

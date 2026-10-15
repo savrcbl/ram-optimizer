@@ -82,3 +82,36 @@ def test_missing_process(monkeypatch):
         raise psutil.NoSuchProcess(pid)
     monkeypatch.setattr(processes.psutil, "Process", boom)
     assert processes.close_process(1)[0] is False
+
+
+def sample_rows():
+    return [
+        {"pid": 10, "name": "brave.exe", "memory_mb": 400.0, "protected": False},
+        {"pid": 11, "name": "Brave.exe", "memory_mb": 300.0, "protected": False},
+        {"pid": 120, "name": "code.exe", "memory_mb": 250.0, "protected": False},
+        {"pid": 13, "name": "explorer.exe", "memory_mb": 200.0, "protected": True},
+    ]
+
+
+def test_filter_by_name_is_case_insensitive():
+    rows, total = processes.filter_processes(sample_rows(), "BRAVE", limit=15)
+    assert [r["pid"] for r in rows] == [10, 11] and total == 2
+
+
+def test_filter_by_pid():
+    rows, total = processes.filter_processes(sample_rows(), "120", limit=15)
+    assert [r["name"] for r in rows] == ["code.exe"] and total == 1
+
+
+def test_limit_applies_after_filter_and_total_is_full_match_count():
+    rows, total = processes.filter_processes(sample_rows(), "", limit=2)
+    assert [r["pid"] for r in rows] == [10, 11] and total == 4
+
+
+def test_limit_zero_or_none_shows_all():
+    assert len(processes.filter_processes(sample_rows(), "", limit=0)[0]) == 4
+    assert len(processes.filter_processes(sample_rows(), "", limit=None)[0]) == 4
+
+
+def test_no_match_gives_empty():
+    assert processes.filter_processes(sample_rows(), "zzz") == ([], 0)

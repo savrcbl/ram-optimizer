@@ -9,7 +9,7 @@ from auto_mode import AutoWatcher
 from config import save_config
 from excludes import add_excluded, remove_excluded
 from memory import get_memory_stats
-from processes import close_process, list_top_processes
+from processes import close_process, filter_processes, list_top_processes
 from startup import list_startup_apps, set_startup_enabled
 from trimmer import smart_trim
 
@@ -21,6 +21,7 @@ class App(ctk.CTk):
         self.cfg = cfg
         self.q: queue.Queue = queue.Queue()
         self._refreshing = False
+        self._all_procs: list = []
         self.watcher = AutoWatcher(
             get_config=lambda: self.cfg,
             on_trim=lambda r: self.q.put(("auto_trim", r)))
@@ -59,7 +60,7 @@ class App(ctk.CTk):
         self.meter_label.pack(anchor="w", padx=10, pady=(0, 8))
 
     def _build_processes(self) -> None:
-        f = self._section("Top processes")
+        f = self._section("Processes")
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("Treeview", background="#2b2b2b", fieldbackground="#2b2b2b",
@@ -68,13 +69,37 @@ class App(ctk.CTk):
         style.configure("Treeview.Heading", background="#3a3a3a",
                         foreground="white", relief="flat", borderwidth=0)
         style.map("Treeview.Heading", background=[("active", "#4a4a4a")])
-        self.tree = ttk.Treeview(f, columns=("name", "pid", "mb"),
-                                 show="headings", height=6)
+
+        top = ctk.CTkFrame(f, fg_color="transparent")
+        top.pack(fill="x", padx=10, pady=(0, 4))
+        self.search_entry = ctk.CTkEntry(top, width=230,
+                                         placeholder_text="Search by name or PID...")
+        self.search_entry.pack(side="left")
+        self.search_entry.bind("<KeyRelease>", lambda e: self._render_procs())
+        ctk.CTkLabel(top, text="Show").pack(side="left", padx=(12, 4))
+        self.limit_menu = ctk.CTkOptionMenu(
+            top, values=["15", "30", "50", "100", "All"], width=80,
+            command=self._on_limit)
+        limit = self.cfg["process_list_limit"]
+        self.limit_menu.set("All" if limit == 0 else str(limit))
+        self.limit_menu.pack(side="left")
+        self.proc_count = ctk.CTkLabel(top, text="")
+        self.proc_count.pack(side="left", padx=10)
+
+        box = ctk.CTkFrame(f, fg_color="transparent")
+        box.pack(fill="x", padx=10, pady=4)
+        self.tree = ttk.Treeview(box, columns=("name", "pid", "mb"),
+                                 show="headings", height=8)
         for col, text, w in (("name", "Name", 300), ("pid", "PID", 80), ("mb", "RAM (MB)", 100)):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=w, anchor="w")
         self.tree.tag_configure("protected", foreground="#777777")
-        self.tree.pack(fill="x", padx=10, pady=4)
+        scrollbar = ctk.CTkScrollbar(box, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="x", expand=True)
+        self.tree.bind("<MouseWheel>", self._on_tree_wheel)
+
         row = ctk.CTkFrame(f, fg_color="transparent")
         row.pack(fill="x", padx=10, pady=(0, 8))
         ctk.CTkButton(row, text="Close process", command=self._close_selected).pack(side="left")
@@ -84,6 +109,16 @@ class App(ctk.CTk):
             side="left")
         self.proc_status = ctk.CTkLabel(row, text="")
         self.proc_status.pack(side="left", padx=8)
+
+    def _on_tree_wheel(self, event) -> str:
+        """Scroll the table itself, not the whole window behind it."""
+        self.tree.yview_scroll(-3 if event.delta > 0 else 3, "units")
+        return "break"
+
+    def _on_limit(self, choice: str) -> None:
+        self.cfg["process_list_limit"] = 0 if choice == "All" else int(choice)
+        save_config(self.cfg)
+        self._render_procs()
 
     def _build_startup(self) -> None:
         f = self._section("Startup apps")
@@ -138,9 +173,9 @@ class App(ctk.CTk):
 
     def _load_procs(self) -> None:
         try:
-            self.q.put(("procs", list_top_processes(15)))
+            self.q.put(("procs", list_top_processes(limit=None)))
         except Exception as e:
-            self.q.put(("error", f"Process list failed: {e}"))
+            self.q.put(("procs_error", f"Process list failed: {e}"))
 
     def refresh_startup(self) -> None:
         for w in self.startup_frame.winfo_children():
@@ -250,6 +285,10 @@ class App(ctk.CTk):
                 kind, data = self.q.get_nowait()
                 if kind == "procs":
                     self._show_procs(data)
+                elif kind == "procs_error":
+                    self._refreshing = False
+                    self.proc_status.configure(text=data)
+                    self.after(5000, self.refresh_processes)
                 elif kind == "clean":
                     self.clean_btn.configure(state="normal")
                     self.clean_label.configure(text=self._fmt(data))
@@ -267,7 +306,16 @@ class App(ctk.CTk):
 
     def _show_procs(self, rows: list) -> None:
         self._refreshing = False
+        self._all_procs = rows
+        self._render_procs()
+        self.after(5000, self.refresh_processes)
+
+    def _render_procs(self) -> None:
+        """Apply the search text and the 'Show' limit to the last scan and redraw."""
+        rows, total = filter_processes(
+            self._all_procs, self.search_entry.get(), self.cfg["process_list_limit"])
         selected = self.tree.selection()
+        scroll = self.tree.yview()[0]
         self.tree.delete(*self.tree.get_children())
         for r in rows:
             tags = ("protected",) if r["protected"] else ()
@@ -275,7 +323,8 @@ class App(ctk.CTk):
                              values=(r["name"], r["pid"], r["memory_mb"]))
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
-        self.after(5000, self.refresh_processes)
+        self.tree.yview_moveto(scroll)
+        self.proc_count.configure(text=f"Showing {len(rows)} of {total}")
 
     def _on_close(self) -> None:
         self.watcher.stop()

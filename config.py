@@ -12,6 +12,7 @@ DEFAULT_CONFIG = {
     "cooldown_seconds": 120,
     "min_process_mb_to_trim": 50,
     "excluded_apps": [],
+    "process_list_limit": 15,  # 0 = show all
 }
 
 
