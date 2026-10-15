@@ -128,13 +128,7 @@ class App(ctk.CTk):
     def _build_excludes(self) -> None:
         f = self._section("Never trim these apps")
         self.exclude_frame = ctk.CTkScrollableFrame(f, height=70)
-        self.exclude_frame.pack(fill="x", padx=10, pady=(0, 4))
-        row = ctk.CTkFrame(f, fg_color="transparent")
-        row.pack(fill="x", padx=10, pady=(0, 8))
-        self.exclude_entry = ctk.CTkEntry(row, width=220, placeholder_text="e.g. game.exe")
-        self.exclude_entry.pack(side="left")
-        ctk.CTkButton(row, text="Add", width=70, command=self._add_typed).pack(
-            side="left", padx=8)
+        self.exclude_frame.pack(fill="x", padx=10, pady=(0, 8))
 
     def _build_clean(self) -> None:
         f = self._section("Smart clean and auto mode")
@@ -204,7 +198,9 @@ class App(ctk.CTk):
             w.destroy()
         names = self.cfg["excluded_apps"]
         if not names:
-            ctk.CTkLabel(self.exclude_frame, text="No apps excluded").pack(anchor="w")
+            ctk.CTkLabel(self.exclude_frame,
+                         text="None yet. Select a process above and press Never trim."
+                         ).pack(anchor="w")
         for name in names:
             row = ctk.CTkFrame(self.exclude_frame, fg_color="transparent")
             row.pack(fill="x")
@@ -216,10 +212,6 @@ class App(ctk.CTk):
         sel = self.tree.selection()
         if sel:
             self._add_excluded(self.tree.item(sel[0], "values")[0])
-
-    def _add_typed(self) -> None:
-        self._add_excluded(self.exclude_entry.get())
-        self.exclude_entry.delete(0, "end")
 
     def _add_excluded(self, name: str) -> None:
         if add_excluded(self.cfg, name):

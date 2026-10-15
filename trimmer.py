@@ -6,7 +6,7 @@ import time
 
 import psutil
 
-from excludes import excluded_set
+from excludes import excluded_set, match_key
 from memory import get_available_mb, get_memory_stats
 from processes import list_top_processes
 
@@ -88,7 +88,7 @@ def smart_trim(min_process_mb: int = 50, settle_seconds: float = 2.0,
     for p in list_top_processes(limit=None):
         if p["protected"] or p["pid"] == foreground or p["pid"] == os.getpid():
             continue
-        if p["name"].lower() in skip_names:
+        if match_key(p["name"]) in skip_names:
             continue
         if p["memory_mb"] < min_process_mb:
             continue

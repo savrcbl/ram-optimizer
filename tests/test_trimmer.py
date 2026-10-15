@@ -53,5 +53,5 @@ def test_trim_process_returns_zero_off_windows():
 def test_excluded_apps_are_never_trimmed(monkeypatch):
     rows = [row(1, "Game.EXE", 800), row(2, "chrome.exe", 300), row(3, "Premiere.exe", 700)]
     calls = setup_fakes(monkeypatch, rows)
-    trimmer.smart_trim(min_process_mb=50, excluded=["game.exe", "PREMIERE.EXE"])
+    trimmer.smart_trim(min_process_mb=50, excluded=["game", "PREMIERE.EXE"])
     assert calls == [2]
