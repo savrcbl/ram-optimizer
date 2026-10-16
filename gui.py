@@ -7,22 +7,35 @@ import customtkinter as ctk
 
 from auto_mode import AutoWatcher
 from config import save_config
+from excludes import add_excluded, remove_excluded
 from memory import get_memory_stats
-from processes import close_process, list_top_processes
+from processes import close_process, filter_processes, list_top_processes
 from startup import list_startup_apps, set_startup_enabled
 from trimmer import smart_trim
+from tray import Tray
 
 
 class App(ctk.CTk):
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, start_minimized: bool = False):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.cfg = cfg
         self.q: queue.Queue = queue.Queue()
         self._refreshing = False
+        self._all_procs: list = []
+        self._hidden = False
+        self._refresh_job = None
+        self._notify_clean = False
         self.watcher = AutoWatcher(
             get_config=lambda: self.cfg,
             on_trim=lambda r: self.q.put(("auto_trim", r)))
+        self.tray = Tray(
+            on_show=lambda: self.q.put(("tray", "show")),
+            on_clean=lambda: self.q.put(("tray", "clean")),
+            on_toggle_auto=lambda: self.q.put(("tray", "auto")),
+            on_quit=lambda: self.q.put(("tray", "quit")),
+            is_auto=lambda: self.cfg["auto_mode"])
+        self.tray_ok = self.tray.start()
         self.title("RAM Optimizer")
         self.geometry("760x700")
         self.minsize(640, 480)
@@ -31,6 +44,7 @@ class App(ctk.CTk):
         self._build_meter()
         self._build_processes()
         self._build_startup()
+        self._build_excludes()
         self._build_clean()
         if self.cfg["auto_mode"]:
             self.watcher.start()
@@ -39,6 +53,10 @@ class App(ctk.CTk):
         self._tick_meter()
         self.refresh_processes()
         self.refresh_startup()
+        self.refresh_excludes()
+        if start_minimized and self.tray_ok:
+            self._hidden = True
+            self.after(600, self.withdraw)  # after CustomTkinter finishes its own startup
 
     # ---- sections -------------------------------------------------
     def _section(self, title: str) -> ctk.CTkFrame:
@@ -56,7 +74,7 @@ class App(ctk.CTk):
         self.meter_label.pack(anchor="w", padx=10, pady=(0, 8))
 
     def _build_processes(self) -> None:
-        f = self._section("Top processes")
+        f = self._section("Processes")
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("Treeview", background="#2b2b2b", fieldbackground="#2b2b2b",
@@ -65,25 +83,66 @@ class App(ctk.CTk):
         style.configure("Treeview.Heading", background="#3a3a3a",
                         foreground="white", relief="flat", borderwidth=0)
         style.map("Treeview.Heading", background=[("active", "#4a4a4a")])
-        self.tree = ttk.Treeview(f, columns=("name", "pid", "mb"),
-                                 show="headings", height=6)
+
+        top = ctk.CTkFrame(f, fg_color="transparent")
+        top.pack(fill="x", padx=10, pady=(0, 4))
+        self.search_entry = ctk.CTkEntry(top, width=230,
+                                         placeholder_text="Search by name or PID...")
+        self.search_entry.pack(side="left")
+        self.search_entry.bind("<KeyRelease>", lambda e: self._render_procs())
+        ctk.CTkLabel(top, text="Show").pack(side="left", padx=(12, 4))
+        self.limit_menu = ctk.CTkOptionMenu(
+            top, values=["15", "30", "50", "100", "All"], width=80,
+            command=self._on_limit)
+        limit = self.cfg["process_list_limit"]
+        self.limit_menu.set("All" if limit == 0 else str(limit))
+        self.limit_menu.pack(side="left")
+        self.proc_count = ctk.CTkLabel(top, text="")
+        self.proc_count.pack(side="left", padx=10)
+
+        box = ctk.CTkFrame(f, fg_color="transparent")
+        box.pack(fill="x", padx=10, pady=4)
+        self.tree = ttk.Treeview(box, columns=("name", "pid", "mb"),
+                                 show="headings", height=8)
         for col, text, w in (("name", "Name", 300), ("pid", "PID", 80), ("mb", "RAM (MB)", 100)):
             self.tree.heading(col, text=text)
             self.tree.column(col, width=w, anchor="w")
         self.tree.tag_configure("protected", foreground="#777777")
-        self.tree.pack(fill="x", padx=10, pady=4)
+        scrollbar = ctk.CTkScrollbar(box, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="x", expand=True)
+        self.tree.bind("<MouseWheel>", self._on_tree_wheel)
+
         row = ctk.CTkFrame(f, fg_color="transparent")
         row.pack(fill="x", padx=10, pady=(0, 8))
         ctk.CTkButton(row, text="Close process", command=self._close_selected).pack(side="left")
-        ctk.CTkButton(row, text="Refresh", width=80, command=self.refresh_processes).pack(
+        ctk.CTkButton(row, text="Never trim", width=90, command=self._exclude_selected).pack(
             side="left", padx=8)
+        ctk.CTkButton(row, text="Refresh", width=80, command=self.refresh_processes).pack(
+            side="left")
         self.proc_status = ctk.CTkLabel(row, text="")
         self.proc_status.pack(side="left", padx=8)
+
+    def _on_tree_wheel(self, event) -> str:
+        """Scroll the table itself, not the whole window behind it."""
+        self.tree.yview_scroll(-3 if event.delta > 0 else 3, "units")
+        return "break"
+
+    def _on_limit(self, choice: str) -> None:
+        self.cfg["process_list_limit"] = 0 if choice == "All" else int(choice)
+        save_config(self.cfg)
+        self._render_procs()
 
     def _build_startup(self) -> None:
         f = self._section("Startup apps")
         self.startup_frame = ctk.CTkScrollableFrame(f, height=90)
         self.startup_frame.pack(fill="x", padx=10, pady=(0, 8))
+
+    def _build_excludes(self) -> None:
+        f = self._section("Never trim these apps")
+        self.exclude_frame = ctk.CTkScrollableFrame(f, height=70)
+        self.exclude_frame.pack(fill="x", padx=10, pady=(0, 8))
 
     def _build_clean(self) -> None:
         f = self._section("Smart clean and auto mode")
@@ -97,6 +156,12 @@ class App(ctk.CTk):
         if self.cfg["auto_mode"]:
             self.auto_switch.select()
         self.auto_switch.pack(anchor="w", padx=10, pady=4)
+        if self.tray_ok:
+            self.tray_switch = ctk.CTkSwitch(f, text="Close button hides to tray",
+                                             command=self._toggle_close_to_tray)
+            if self.cfg["close_to_tray"]:
+                self.tray_switch.select()
+            self.tray_switch.pack(anchor="w", padx=10, pady=4)
         self.thr_label = ctk.CTkLabel(f, text="")
         self.thr_label.pack(anchor="w", padx=10)
         self.thr_slider = ctk.CTkSlider(f, from_=60, to=95, number_of_steps=35,
@@ -112,6 +177,7 @@ class App(ctk.CTk):
         self.meter_bar.set(s["percent"] / 100)
         self.meter_label.configure(
             text=f"{s['used_gb']} / {s['total_gb']} GB used ({s['percent']}%)")
+        self.tray.set_tooltip(f"RAM Optimizer: {s['percent']}% used")
         self.after(2000, self._tick_meter)
 
     def refresh_processes(self) -> None:
@@ -122,9 +188,9 @@ class App(ctk.CTk):
 
     def _load_procs(self) -> None:
         try:
-            self.q.put(("procs", list_top_processes(15)))
+            self.q.put(("procs", list_top_processes(limit=None)))
         except Exception as e:
-            self.q.put(("error", f"Process list failed: {e}"))
+            self.q.put(("procs_error", f"Process list failed: {e}"))
 
     def refresh_startup(self) -> None:
         for w in self.startup_frame.winfo_children():
@@ -148,6 +214,39 @@ class App(ctk.CTk):
             self.proc_status.configure(text=f"Could not change {name}")
             self.refresh_startup()
 
+    def refresh_excludes(self) -> None:
+        for w in self.exclude_frame.winfo_children():
+            w.destroy()
+        names = self.cfg["excluded_apps"]
+        if not names:
+            ctk.CTkLabel(self.exclude_frame,
+                         text="None yet. Select a process above and press Never trim."
+                         ).pack(anchor="w")
+        for name in names:
+            row = ctk.CTkFrame(self.exclude_frame, fg_color="transparent")
+            row.pack(fill="x")
+            ctk.CTkLabel(row, text=name).pack(side="left")
+            ctk.CTkButton(row, text="Remove", width=70, height=22,
+                          command=lambda n=name: self._remove_excluded(n)).pack(side="right")
+
+    def _exclude_selected(self) -> None:
+        sel = self.tree.selection()
+        if sel:
+            self._add_excluded(self.tree.item(sel[0], "values")[0])
+
+    def _add_excluded(self, name: str) -> None:
+        if add_excluded(self.cfg, name):
+            save_config(self.cfg)
+            self.refresh_excludes()
+            self.proc_status.configure(text=f"{name} will never be trimmed")
+        else:
+            self.proc_status.configure(text="Already excluded (or empty name)")
+
+    def _remove_excluded(self, name: str) -> None:
+        if remove_excluded(self.cfg, name):
+            save_config(self.cfg)
+            self.refresh_excludes()
+
     def _close_selected(self) -> None:
         sel = self.tree.selection()
         if not sel:
@@ -168,7 +267,9 @@ class App(ctk.CTk):
 
         def work():
             try:
-                self.q.put(("clean", smart_trim(self.cfg["min_process_mb_to_trim"])))
+                self.q.put(("clean", smart_trim(
+                    self.cfg["min_process_mb_to_trim"],
+                    excluded=list(self.cfg["excluded_apps"]))))
             except Exception as e:
                 self.q.put(("error", f"Clean failed: {e}"))
         threading.Thread(target=work, daemon=True).start()
@@ -177,6 +278,11 @@ class App(ctk.CTk):
         self.cfg["auto_mode"] = bool(self.auto_switch.get())
         save_config(self.cfg)
         (self.watcher.start if self.cfg["auto_mode"] else self.watcher.stop)()
+        self.tray.refresh_menu()
+
+    def _toggle_close_to_tray(self) -> None:
+        self.cfg["close_to_tray"] = bool(self.tray_switch.get())
+        save_config(self.cfg)
 
     def _on_threshold(self, value) -> None:
         self.cfg["trim_threshold_percent"] = int(float(value))
@@ -197,9 +303,18 @@ class App(ctk.CTk):
                 kind, data = self.q.get_nowait()
                 if kind == "procs":
                     self._show_procs(data)
+                elif kind == "procs_error":
+                    self._refreshing = False
+                    self.proc_status.configure(text=data)
+                    self._schedule_refresh(5000)
                 elif kind == "clean":
                     self.clean_btn.configure(state="normal")
                     self.clean_label.configure(text=self._fmt(data))
+                    if self._notify_clean:  # started from the tray menu: nobody is watching the window
+                        self._notify_clean = False
+                        self.tray.notify(self._fmt(data))
+                elif kind == "tray":
+                    self._on_tray(data)
                 elif kind == "auto_trim":
                     self.clean_label.configure(text="Auto: " + self._fmt(data))
                 elif kind == "closed":
@@ -214,7 +329,30 @@ class App(ctk.CTk):
 
     def _show_procs(self, rows: list) -> None:
         self._refreshing = False
+        self._all_procs = rows
+        self._render_procs()
+        self._schedule_refresh(5000)
+
+    def _schedule_refresh(self, ms: int) -> None:
+        """Keep exactly one pending process refresh."""
+        if self._refresh_job:
+            self.after_cancel(self._refresh_job)
+        self._refresh_job = self.after(ms, self._auto_refresh)
+
+    def _auto_refresh(self) -> None:
+        """Skip the (relatively costly) process scan while the window is hidden."""
+        self._refresh_job = None
+        if self._hidden:
+            self._schedule_refresh(5000)
+        else:
+            self.refresh_processes()
+
+    def _render_procs(self) -> None:
+        """Apply the search text and the 'Show' limit to the last scan and redraw."""
+        rows, total = filter_processes(
+            self._all_procs, self.search_entry.get(), self.cfg["process_list_limit"])
         selected = self.tree.selection()
+        scroll = self.tree.yview()[0]
         self.tree.delete(*self.tree.get_children())
         for r in rows:
             tags = ("protected",) if r["protected"] else ()
@@ -222,9 +360,39 @@ class App(ctk.CTk):
                              values=(r["name"], r["pid"], r["memory_mb"]))
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
-        self.after(5000, self.refresh_processes)
+        self.tree.yview_moveto(scroll)
+        self.proc_count.configure(text=f"Showing {len(rows)} of {total}")
+
+    def _on_tray(self, action: str) -> None:
+        if action == "show":
+            self._show_window()
+        elif action == "clean":
+            if str(self.clean_btn.cget("state")) == "normal":
+                self._notify_clean = True
+                self._clean_now()
+        elif action == "auto":
+            (self.auto_switch.deselect if self.auto_switch.get() else self.auto_switch.select)()
+            self._toggle_auto()
+        elif action == "quit":
+            self._quit()
+
+    def _show_window(self) -> None:
+        self._hidden = False
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self._schedule_refresh(0)
 
     def _on_close(self) -> None:
+        """Window X button: hide to tray if enabled, otherwise quit."""
+        if self.tray_ok and self.cfg["close_to_tray"]:
+            self._hidden = True
+            self.withdraw()
+        else:
+            self._quit()
+
+    def _quit(self) -> None:
         self.watcher.stop()
+        self.tray.stop()
         save_config(self.cfg)
         self.destroy()

@@ -5,13 +5,25 @@ manages startup apps, and trims memory from idle background processes when RAM i
 
 ## What it does
 - Live RAM meter.
-- Top 15 processes by RAM, with a Close button (protected system processes are greyed out and refused).
+- Process list sorted by RAM: search by name or PID, choose how many to show (15 by default, up to All),
+  scrollable, with a Close button (protected system processes are greyed out and refused).
 - Startup manager for apps in `HKCU\...\Run` (toggle on/off; nothing is deleted).
 - Smart clean: trims the working set of large, non-protected, non-foreground processes.
   The "freed" amount is the real change in system available memory, measured after a
   2-second settle delay (not a sum of per-process numbers, which double-counts shared memory).
+- Exclude list: apps that Smart clean and auto mode never trim (a game, a video editor).
+  Add an app by selecting it in the process list and pressing "Never trim"; remove it from the list below.
 - Auto mode: checks every few seconds and runs Smart clean when RAM use passes your threshold,
   then waits for a cooldown.
+
+## System tray
+- A tray icon (near the clock) shows RAM use on hover. Left-click opens the window; right-click gives
+  Open, Smart clean now, Auto mode (checkbox) and Quit.
+- With "Close button hides to tray" on (default), the X button hides the window and the app keeps
+  running, so auto mode keeps working. Use Quit in the tray menu to really exit.
+- `python main.py --minimized` starts hidden in the tray.
+- Only one copy can run at a time.
+- If the tray cannot start, the app works as before and the X button quits.
 
 ## What it does not do
 - No registry cleaning, no service disabling, no Defender/UAC/update changes.
