@@ -16,6 +16,15 @@ manages startup apps, and trims memory from idle background processes when RAM i
 - Auto mode: checks every few seconds and runs Smart clean when RAM use passes your threshold,
   then waits for a cooldown.
 
+## System tray
+- A tray icon (near the clock) shows RAM use on hover. Left-click opens the window; right-click gives
+  Open, Smart clean now, Auto mode (checkbox) and Quit.
+- With "Close button hides to tray" on (default), the X button hides the window and the app keeps
+  running, so auto mode keeps working. Use Quit in the tray menu to really exit.
+- `python main.py --minimized` starts hidden in the tray.
+- Only one copy can run at a time.
+- If the tray cannot start, the app works as before and the X button quits.
+
 ## What it does not do
 - No registry cleaning, no service disabling, no Defender/UAC/update changes.
 - No standby-list clearing (needs admin and is easy to get wrong).

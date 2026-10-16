@@ -79,3 +79,7 @@ def test_process_list_limit_default_and_override():
     config.get_config_dir().mkdir(parents=True)
     config.get_config_path().write_text(json.dumps({"process_list_limit": 0}), encoding="utf-8")
     assert config.load_config()["process_list_limit"] == 0
+
+
+def test_close_to_tray_default_true():
+    assert config.load_config()["close_to_tray"] is True

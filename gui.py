@@ -12,19 +12,30 @@ from memory import get_memory_stats
 from processes import close_process, filter_processes, list_top_processes
 from startup import list_startup_apps, set_startup_enabled
 from trimmer import smart_trim
+from tray import Tray
 
 
 class App(ctk.CTk):
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, start_minimized: bool = False):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.cfg = cfg
         self.q: queue.Queue = queue.Queue()
         self._refreshing = False
         self._all_procs: list = []
+        self._hidden = False
+        self._refresh_job = None
+        self._notify_clean = False
         self.watcher = AutoWatcher(
             get_config=lambda: self.cfg,
             on_trim=lambda r: self.q.put(("auto_trim", r)))
+        self.tray = Tray(
+            on_show=lambda: self.q.put(("tray", "show")),
+            on_clean=lambda: self.q.put(("tray", "clean")),
+            on_toggle_auto=lambda: self.q.put(("tray", "auto")),
+            on_quit=lambda: self.q.put(("tray", "quit")),
+            is_auto=lambda: self.cfg["auto_mode"])
+        self.tray_ok = self.tray.start()
         self.title("RAM Optimizer")
         self.geometry("760x700")
         self.minsize(640, 480)
@@ -43,6 +54,9 @@ class App(ctk.CTk):
         self.refresh_processes()
         self.refresh_startup()
         self.refresh_excludes()
+        if start_minimized and self.tray_ok:
+            self._hidden = True
+            self.after(600, self.withdraw)  # after CustomTkinter finishes its own startup
 
     # ---- sections -------------------------------------------------
     def _section(self, title: str) -> ctk.CTkFrame:
@@ -142,6 +156,12 @@ class App(ctk.CTk):
         if self.cfg["auto_mode"]:
             self.auto_switch.select()
         self.auto_switch.pack(anchor="w", padx=10, pady=4)
+        if self.tray_ok:
+            self.tray_switch = ctk.CTkSwitch(f, text="Close button hides to tray",
+                                             command=self._toggle_close_to_tray)
+            if self.cfg["close_to_tray"]:
+                self.tray_switch.select()
+            self.tray_switch.pack(anchor="w", padx=10, pady=4)
         self.thr_label = ctk.CTkLabel(f, text="")
         self.thr_label.pack(anchor="w", padx=10)
         self.thr_slider = ctk.CTkSlider(f, from_=60, to=95, number_of_steps=35,
@@ -157,6 +177,7 @@ class App(ctk.CTk):
         self.meter_bar.set(s["percent"] / 100)
         self.meter_label.configure(
             text=f"{s['used_gb']} / {s['total_gb']} GB used ({s['percent']}%)")
+        self.tray.set_tooltip(f"RAM Optimizer: {s['percent']}% used")
         self.after(2000, self._tick_meter)
 
     def refresh_processes(self) -> None:
@@ -257,6 +278,11 @@ class App(ctk.CTk):
         self.cfg["auto_mode"] = bool(self.auto_switch.get())
         save_config(self.cfg)
         (self.watcher.start if self.cfg["auto_mode"] else self.watcher.stop)()
+        self.tray.refresh_menu()
+
+    def _toggle_close_to_tray(self) -> None:
+        self.cfg["close_to_tray"] = bool(self.tray_switch.get())
+        save_config(self.cfg)
 
     def _on_threshold(self, value) -> None:
         self.cfg["trim_threshold_percent"] = int(float(value))
@@ -280,10 +306,15 @@ class App(ctk.CTk):
                 elif kind == "procs_error":
                     self._refreshing = False
                     self.proc_status.configure(text=data)
-                    self.after(5000, self.refresh_processes)
+                    self._schedule_refresh(5000)
                 elif kind == "clean":
                     self.clean_btn.configure(state="normal")
                     self.clean_label.configure(text=self._fmt(data))
+                    if self._notify_clean:  # started from the tray menu: nobody is watching the window
+                        self._notify_clean = False
+                        self.tray.notify(self._fmt(data))
+                elif kind == "tray":
+                    self._on_tray(data)
                 elif kind == "auto_trim":
                     self.clean_label.configure(text="Auto: " + self._fmt(data))
                 elif kind == "closed":
@@ -300,7 +331,21 @@ class App(ctk.CTk):
         self._refreshing = False
         self._all_procs = rows
         self._render_procs()
-        self.after(5000, self.refresh_processes)
+        self._schedule_refresh(5000)
+
+    def _schedule_refresh(self, ms: int) -> None:
+        """Keep exactly one pending process refresh."""
+        if self._refresh_job:
+            self.after_cancel(self._refresh_job)
+        self._refresh_job = self.after(ms, self._auto_refresh)
+
+    def _auto_refresh(self) -> None:
+        """Skip the (relatively costly) process scan while the window is hidden."""
+        self._refresh_job = None
+        if self._hidden:
+            self._schedule_refresh(5000)
+        else:
+            self.refresh_processes()
 
     def _render_procs(self) -> None:
         """Apply the search text and the 'Show' limit to the last scan and redraw."""
@@ -318,7 +363,36 @@ class App(ctk.CTk):
         self.tree.yview_moveto(scroll)
         self.proc_count.configure(text=f"Showing {len(rows)} of {total}")
 
+    def _on_tray(self, action: str) -> None:
+        if action == "show":
+            self._show_window()
+        elif action == "clean":
+            if str(self.clean_btn.cget("state")) == "normal":
+                self._notify_clean = True
+                self._clean_now()
+        elif action == "auto":
+            (self.auto_switch.deselect if self.auto_switch.get() else self.auto_switch.select)()
+            self._toggle_auto()
+        elif action == "quit":
+            self._quit()
+
+    def _show_window(self) -> None:
+        self._hidden = False
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self._schedule_refresh(0)
+
     def _on_close(self) -> None:
+        """Window X button: hide to tray if enabled, otherwise quit."""
+        if self.tray_ok and self.cfg["close_to_tray"]:
+            self._hidden = True
+            self.withdraw()
+        else:
+            self._quit()
+
+    def _quit(self) -> None:
         self.watcher.stop()
+        self.tray.stop()
         save_config(self.cfg)
         self.destroy()
