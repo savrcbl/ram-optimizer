@@ -46,13 +46,22 @@ Settings and the log live in `%APPDATA%\RamOptimizer` (`config.json`, `ram_optim
 
 ## Tests
 ```
-pytest
+python -m pytest
 ```
 Tests use mocks, so they run on any OS. Real behavior must be checked on Windows.
 
 ## Build an .exe
+
 ```
-pip install pyinstaller
-pyinstaller --noconsole --onefile main.py
+python -m pip install pyinstaller
+python -m PyInstaller --noconsole --onefile --name RamOptimizer --collect-all customtkinter --hidden-import pystray._win32 main.py
 ```
+
+The exe is created at `dist\RamOptimizer.exe`.
+
+Notes:
+- Use `python -m ...` so it works even if Python's Scripts folder isn't on your PATH. The module name is `PyInstaller` (capital P and I).
+- Windows SmartScreen may warn about an unsigned exe. Click **More info**, then **Run anyway**.
+- If the exe closes immediately, rebuild with `--console` instead of `--noconsole` and run it from a terminal to see the error.
+
 Unsigned exes may trigger SmartScreen or antivirus warnings.
